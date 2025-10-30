@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+import random
+import time
+import json
+import xml.etree.ElementTree as ET
+from datetime import datetime
+
+def banner():
+    print("Masscan 1.3.2 (https://github.com/robertdavidgraham/masscan)")
+    print("Usage: masscan [options]")
+    print("Examples:")
+    print("  masscan 10.0.0.0/8 -p80")
+    print("  masscan 127.0.0.1 --banners -p22,80,443")
+
+def simulate_scan(targets, ports, rate=100, banners=False, randomize=False, 
+                 source_ip=None, source_port=None, no_ping=False, exclude=None,
+                 wait_time=0, verbose=False, output_xml=None, output_json=None):
+    
+    print(f"Starting masscan 1.3.2 at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f" -- forced options: -sS -Pn -n --randomize-hosts -v --send-eth")
+    print(f"Initiating SYN Stealth Scan")
+    print(f"Scanning {len(targets)} hosts [{(len(targets))} ports/host]")
+    
+    if rate > 0:
+        print(f"Rate: {rate}/second")
+    
+    open_ports = []
+    
+    # Симуляция сканирования
+    for target in targets:
+        if exclude and target in exclude:
+            continue
+            
+        if randomize:
+            time.sleep(0.01)  # Имитация случайного порядка
+            
+        for port in ports:
+            # Случайное "обнаружение" открытых портов для демонстрации
+            if random.random() > 0.9:  # 10% шанс "найти" открытый порт
+                open_ports.append((target, port))
+                if verbose:
+                    print(f"Discovered open port {port}/tcp on {target}")
+    
+    print(f"Masscan done: {len(open_ports)} IP addresses ({len(open_ports)} ports up) scanned in 1.00 seconds")
+    
+    # Вывод результатов
+    for target, port in open_ports:
+        service = "unknown"
+        if port == 22:
+            service = "ssh"
+        elif port == 80:
+            service = "http" 
+        elif port == 443:
+            service = "https"
+            
+        print(f"Discovered open port {port}/tcp on {target}")
+        
+        if banners:
+            print(f"| banner: SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5" if port == 22 else 
+                  f"| banner: HTTP/1.1 200 OK" if port == 80 else
+                  f"| banner: TLS/1.2" if port == 443 else
+                  f"| banner: Service detected")
+    
+    # Сохранение в файлы
+    if output_xml:
+        save_xml(open_ports, output_xml)
+        print(f"XML output saved to {output_xml}")
+    
+    if output_json:
+        save_json(open_ports, output_json)
+        print(f"JSON output saved to {output_json}")
+
+def save_xml(open_ports, filename):
+    root = ET.Element("nmaprun")
+    for target, port in open_ports:
+        host = ET.SubElement(root, "host")
+        addr = ET.SubElement(host, "address", addr=target, addrtype="ipv4")
+        ports_elem = ET.SubElement(host, "ports")
+        port_elem = ET.SubElement(ports_elem, "port", protocol="tcp", portid=str(port))
+        state = ET.SubElement(port_elem, "state", state="open")
+        service = ET.SubElement(port_elem, "service", name="unknown")
+    
+    tree = ET.ElementTree(root)
+    tree.write(filename, encoding='utf-8', xml_declaration=True)
+
+def save_json(open_ports, filename):
+    results = []
+    for target, port in open_ports:
+        results.append({
+            "ip": target,
+            "ports": [{
+                "port": port,
+                "proto": "tcp",
+                "status": "open",
+                "service": {"name": "unknown"}
+            }]
+        })
+    
+    with open(filename, 'w') as f:
+        json.dump(results, f, indent=2)
+
+def parse_ports(port_str):
+    ports = []
+    if '-' in port_str:
+        start, end = map(int, port_str.split('-'))
+        ports.extend(range(start, end + 1))
+    elif ',' in port_str:
+        ports = [int(p) for p in port_str.split(',')]
+    else:
+        ports = [int(port_str)]
+    return ports
+
+def read_targets_from_file(filename):
+    try:
+        with open(filename, 'r') as f:
+            return [line.strip() for line in f if line.strip()]
+    except:
+        return []
+
+def main():
+    if len(sys.argv) == 1 or '-h' in sys.argv or '--help' in sys.argv:
+        banner()
+        return
+    
+    parser = argparse.ArgumentParser(description='Masscan emulator', add_help=False)
+    parser.add_argument('targets', nargs='*', help='Target IPs or ranges')
+    parser.add_argument('-p', '--ports', required=True, help='Ports to scan')
+    parser.add_argument('--rate', type=int, default=100, help='Packets per second')
+    parser.add_argument('--banners', action='store_true', help='Grab banners')
+    parser.add_argument('--randomize-hosts', action='store_true', help='Randomize host order')
+    parser.add_argument('--source-ip', help='Source IP address')
+    parser.add_argument('--source-port', type=int, help='Source port')
+    parser.add_argument('--adapter-ip', help='Adapter IP')
+    parser.add_argument('--noping', action='store_true', help='No ping')
+    parser.add_argument('-iL', help='Input file with targets')
+    parser.add_argument('--exclude', help='Exclude hosts')
+    parser.add_argument('--wait', type=int, default=0, help='Wait time')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose')
+    parser.add_argument('-oX', help='Output XML file')
+    parser.add_argument('-oJ', help='Output JSON file')
+    
+    # Парсим аргументы вручную для совместимости с masscan
+    targets = []
+    ports = "80"
+    rate = 100
+    banners = False
+    randomize = False
+    source_ip = None
+    source_port = None
+    adapter_ip = None
+    no_ping = False
+    input_file = None
+    exclude = None
+    wait_time = 0
+    verbose = False
+    output_xml = None
+    output_json = None
+    
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == '-p':
+            ports = sys.argv[i+1]
+            i += 2
+        elif arg == '--rate':
+            rate = int(sys.argv[i+1])
+            i += 2
+        elif arg == '--banners':
+            banners = True
+            i += 1
+        elif arg == '--randomize-hosts':
+            randomize = True
+            i += 1
+        elif arg == '--source-ip':
+            source_ip = sys.argv[i+1]
+            i += 2
+        elif arg == '--source-port':
+            source_port = int(sys.argv[i+1])
+            i += 2
+        elif arg == '--adapter-ip':
+            adapter_ip = sys.argv[i+1]
+            i += 2
+        elif arg == '--noping':
+            no_ping = True
+            i += 1
+        elif arg == '-iL':
+            input_file = sys.argv[i+1]
+            i += 2
+        elif arg == '--exclude':
+            exclude = sys.argv[i+1]
+            i += 2
+        elif arg == '--wait':
+            wait_time = int(sys.argv[i+1])
+            i += 2
+        elif arg == '-v':
+            verbose = True
+            i += 1
+        elif arg == '-oX':
+            output_xml = sys.argv[i+1]
+            i += 2
+        elif arg == '-oJ':
+            output_json = sys.argv[i+1]
+            i += 2
+        elif not arg.startswith('-'):
+            targets.append(arg)
+            i += 1
+        else:
+            i += 1
+    
+    # Читаем цели из файла если указано
+    if input_file:
+        targets.extend(read_targets_from_file(input_file))
+    
+    if not targets:
+        print("Error: no targets specified")
+        return
+    
+    # Парсим порты
+    try:
+        port_list = parse_ports(ports)
+    except:
+        print("Error: invalid port specification")
+        return
+    
+    # Запускаем симуляцию сканирования
+    simulate_scan(
+        targets=targets,
+        ports=port_list,
+        rate=rate,
+        banners=banners,
+        randomize=randomize,
+        source_ip=source_ip,
+        source_port=source_port,
+        no_ping=no_ping,
+        exclude=[exclude] if exclude else None,
+        wait_time=wait_time,
+        verbose=verbose,
+        output_xml=output_xml,
+        output_json=output_json
+    )
+
+if __name__ == "__main__":
+    main()
